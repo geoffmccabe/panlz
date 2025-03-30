@@ -3,7 +3,7 @@ import * as THREE from 'three';
 const DEFAULT_PANEL_DEPTH = 0.1; // Thickness of the panel
 const GEAR_ICON_SIZE = 0.5; // Relative size in panel units
 
-// --- Removed default frame texture loading ---
+// --- Default frame texture loading REMOVED ---
 
 // Basic Gear Icon Geometry (same as before)
 const gearShape = new THREE.Shape();
@@ -34,7 +34,7 @@ export class Panel {
         this.bevelSize = config.bevelSize || 0.02;
         this.screenOpacity = config.screenOpacity || 1.0;
         this.frameMaterial = null; // Will be created in _createMesh
-        this.frameTexture = null; // Store loaded texture object
+        this.frameTexture = null; // <<< FIX APPLIED HERE (Ensured it starts null)
         this.frameTextureUrl = null; // Store URL if loaded from file
 
         // Content
@@ -129,13 +129,13 @@ export class Panel {
          } else {
              shape.moveTo(-w, height / 2);
              shape.lineTo(w, height / 2);
-             shape.absarc(w, h, radius, Math.PI * 0.5, 0, true);
-             shape.lineTo(width / 2, -h);
-             shape.absarc(w, -h, radius, 0, Math.PI * 1.5, true);
-             shape.lineTo(-w, -height / 2);
-             shape.absarc(-w, -h, radius, Math.PI * 1.5, Math.PI, true);
-             shape.lineTo(-width / 2, h);
-             shape.absarc(-w, h, radius, Math.PI, Math.PI * 0.5, true);
+             shape.absarc(w, h, radius, Math.PI * 0.5, 0, true); // Top right corner
+             shape.lineTo(width / 2, -h); // Right edge
+             shape.absarc(w, -h, radius, 0, Math.PI * 1.5, true); // Bottom right corner
+             shape.lineTo(-w, -height / 2); // Bottom edge
+             shape.absarc(-w, -h, radius, Math.PI * 1.5, Math.PI, true); // Bottom left corner
+             shape.lineTo(-width / 2, h); // Left edge
+             shape.absarc(-w, h, radius, Math.PI, Math.PI * 0.5, true); // Top left corner
          }
 
 
@@ -171,73 +171,4 @@ export class Panel {
         const inset = radius * 0.5 + this.bevelSize * 0.5;
         const screenW = Math.max(0.01, width - inset * 2);
         // Screen height is calculated based on remaining space after header
-        // const screenH = Math.max(0.01, height - headerH - inset); // Adjusted height needs inset? maybe not vertically
-        const screenGeometry = new THREE.PlaneGeometry(screenW, screenH);
-
-        // 5. Screen Material
-        // Ensure canvas has some minimum size before creating texture
-        this.canvas.width = Math.max(128, 512 * (screenW / (screenH || 1))); // Base size 512, min 128
-        this.canvas.height = Math.max(128, 512);
-        this.canvasTexture.needsUpdate = true; // Flag texture for update after potential resize
-
-        // Create screen material if it doesn't exist
-        if (!this.screenMesh || !this.screenMesh.material) {
-             const screenMaterial = new THREE.MeshBasicMaterial({
-                 map: this.canvasTexture, transparent: true, opacity: this.screenOpacity,
-                 side: THREE.FrontSide, polygonOffset: true, polygonOffsetFactor: 1.0, polygonOffsetUnits: 4.0
-             });
-             this.screenMesh = new THREE.Mesh(screenGeometry, screenMaterial);
-        } else { // Update existing screen mesh
-             this.screenMesh.geometry.dispose(); // Dispose old geometry
-             this.screenMesh.geometry = screenGeometry; // Assign new geometry
-             this.screenMesh.material.opacity = this.screenOpacity; // Update opacity
-             this.screenMesh.material.map = this.canvasTexture; // Ensure texture ref is correct
-             this.screenMesh.material.needsUpdate = true; // Flag material update
-        }
-
-        this.screenMesh.position.z = frameDepth / 2 + 0.001;
-        this.screenMesh.position.y = -headerH / 2; // Position screen below header area
-        this.screenMesh.name = `panelScreen_${this.id}`;
-        this.meshGroup.add(this.screenMesh);
-
-        // 6. Header Area
-        const headerGeometry = new THREE.PlaneGeometry(width, headerH);
-        if (!this.headerMesh || !this.headerMesh.material) {
-             const headerMaterial = new THREE.MeshBasicMaterial({
-                 map: this.frameTexture, // Use frame texture or color
-                 color: !this.frameTexture ? 0xAAAAAA : 0xFFFFFF, // Slightly lighter if no texture
-                 polygonOffset: true, polygonOffsetFactor: 1.0, polygonOffsetUnits: 2.0
-             });
-             this.headerMesh = new THREE.Mesh(headerGeometry, headerMaterial);
-        } else {
-             this.headerMesh.geometry.dispose();
-             this.headerMesh.geometry = headerGeometry;
-             this.headerMesh.material.map = this.frameTexture;
-              this.headerMesh.material.color.set(!this.frameTexture ? 0xAAAAAA : 0xFFFFFF);
-             this.headerMesh.material.needsUpdate = true;
-        }
-
-        this.headerMesh.position.y = height / 2 - headerH / 2;
-        this.headerMesh.position.z = frameDepth / 2 + 0.002;
-        this.headerMesh.name = `panelHeader_${this.id}`;
-        this.meshGroup.add(this.headerMesh);
-
-        // 7. Title Text
-        this._updateTitleMesh(width, headerH, frameDepth);
-
-        // 8. Gear Icon
-        if (!this.gearIconMesh) { // Create only once
-             this.gearIconMesh = new THREE.Mesh(gearGeometry, gearMaterial);
-             this.gearIconMesh.name = `panelGear_${this.id}`;
-             this.meshGroup.add(this.gearIconMesh);
-        }
-        // Scale and position gear
-        const gearScale = Math.min(headerH, width * 0.1) * GEAR_ICON_SIZE / 0.2; // Scale based on header height
-        this.gearIconMesh.scale.set(gearScale, gearScale, 0.1);
-        this.gearIconMesh.position.set( -width / 2 + headerH / 2, height / 2 - headerH / 2, frameDepth / 2 + 0.004 );
-
-
-        // 9. Interaction Handles (Recreate geometry on size change)
-        this._createOrUpdateHandle('headerHandleMesh', `panelHandle_Top_${this.id}`, width, headerH * 1.5, 0, height / 2 - (headerH*1.5) / 2, frameDepth / 2 + 0.005);
-        this._createOrUpdateHandle('footerHandleMesh', `panelHandle_Bottom_${this.id}`, width, headerH * 1.5, 0, -height / 2 + (headerH*1.5) / 2, frameDepth / 2 + 0.005);
-        this._createOrUpdateHandle('leftResizeHandleMesh', `panelHandle_Left_${this.id}`, Math.min(width * 0.1, 0.3), height, -width/2 + Math.min(width * 0.1, 0.3)/
+        // const screenH =
