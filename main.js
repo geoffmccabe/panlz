@@ -5,11 +5,13 @@ import { PanelManager } from './PanelManager.js';
 // --- Scene Setup ---
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.z = 15; // Adjust as needed based on panel sizes
+camera.position.z = 15;
+camera.lookAt(0, 0, 0); // <<< ADDED: Explicitly look at the origin
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x555555); // <<< ADDED: Set background to medium gray for debugging
 document.body.appendChild(renderer.domElement);
 
 // --- Lighting (General, Non-directional) ---
@@ -19,31 +21,32 @@ const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x888888, 0.5); // W
 hemisphereLight.position.set(0, 20, 0);
 scene.add(hemisphereLight);
 
-// --- Background ---
+// --- Background Texture ---
+// We still try to load it, but the gray clear color will show if it fails or is obscured
 const textureLoader = new THREE.TextureLoader();
-// Use the relative path assuming the image is in 'images' folder and served by GitHub Pages
 const bgTextureUrl = 'images/perc-bkgd.webp';
 textureLoader.load(
     bgTextureUrl,
     (texture) => {
         texture.colorSpace = THREE.SRGBColorSpace;
-        scene.background = texture;
+        scene.background = texture; // This will draw *over* the gray clear color if successful
         console.log('Background texture loaded successfully.');
     },
     undefined, // Progress callback (optional)
     (error) => {
         console.error(`Error loading background texture from ${bgTextureUrl}:`, error);
-        scene.background = new THREE.Color(0x202025); // Fallback color if texture fails
+        // No need for fallback color here now, gray clear color is the fallback
+        // scene.background = new THREE.Color(0x202025);
     }
 );
 
-// --- Simple Test Cube --- // <<< CUBE CODE ADDED HERE
+// --- Simple Test Cube ---
 const testGeo = new THREE.BoxGeometry(2, 2, 2); // Made slightly larger
 const testMat = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Bright red
 const testCube = new THREE.Mesh(testGeo, testMat);
 testCube.position.set(0, 0, 0); // Place at origin
 scene.add(testCube);
-console.log('--- Added Test Cube to Scene ---');
+console.log('--- Added Test Cube to Scene ---'); // Log confirmation
 // ----------------------
 
 
@@ -82,6 +85,8 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 function animate() {
     requestAnimationFrame(animate);
+    console.log("Animate loop running..."); // <<< ADDED: Log to confirm loop runs
+
     const deltaTime = clock.getDelta();
 
     panelManager.update(deltaTime); // Update panel animations (like jiggle)
