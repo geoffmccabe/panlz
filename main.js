@@ -37,6 +37,16 @@ textureLoader.load(
     }
 );
 
+// --- Simple Test Cube --- // <<< CUBE CODE ADDED HERE
+const testGeo = new THREE.BoxGeometry(2, 2, 2); // Made slightly larger
+const testMat = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Bright red
+const testCube = new THREE.Mesh(testGeo, testMat);
+testCube.position.set(0, 0, 0); // Place at origin
+scene.add(testCube);
+console.log('--- Added Test Cube to Scene ---');
+// ----------------------
+
+
 // --- Panel Manager ---
 // Pass scene, camera, renderer DOM element, and initial grid config
 const panelManager = new PanelManager(scene, camera, renderer.domElement, {
@@ -47,7 +57,7 @@ const panelManager = new PanelManager(scene, camera, renderer.domElement, {
 
 // --- Initial Panels (Prompt v1 Layout) ---
 // Set initial spacing (calculates world units from pixels) using the value stored in panelManager
-panelManager.setSpacing(panelManager.gridSpacingPx); // <<< FIX APPLIED HERE
+panelManager.setSpacing(panelManager.gridSpacingPx);
 
 panelManager.addPanel({ gridX: 0, gridY: 0, widthUnits: 6, title: 'Top Full Width' });
 panelManager.addPanel({ gridX: 0, gridY: 1, widthUnits: 3, title: 'Left 1' });
@@ -75,6 +85,10 @@ function animate() {
     const deltaTime = clock.getDelta();
 
     panelManager.update(deltaTime); // Update panel animations (like jiggle)
+
+    // Optional: Rotate the test cube slowly to prove animation loop runs
+    // testCube.rotation.x += 0.01;
+    // testCube.rotation.y += 0.01;
 
     renderer.render(scene, camera);
 }
