@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Panel Grid</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #222; }
+        canvas { display: block; }
+        #settings-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(50, 50, 50, 0.9);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: sans-serif;
+            display: none; /* Hidden by default */
+            width: 280px;
+            border: 1px solid #555;
+            z-index: 100;
+        }
+        #settings-panel h3 { margin-top: 0; border-bottom: 1px solid #666; padding-bottom: 5px; }
+        #settings-panel label { display: block; margin-top: 10px; font-size: 0.9em;}
+        #settings-panel input[type=range],
+        #settings-panel input[type=number],
+        #settings-panel input[type=text],
+        #settings-panel input[type=file],
+        #settings-panel textarea { width: 95%; margin-top: 3px; }
+        #settings-panel button { margin-top: 15px; padding: 5px 10px; }
+        #settings-panel .checkbox-group { margin-top: 10px; }
+        #js-code-popup {
+             /* Similar styling to settings-panel, maybe larger */
+             position: absolute;
+             top: 50%;
+             left: 50%;
+             transform: translate(-50%, -50%);
+             background: rgba(40, 40, 40, 0.95);
+             color: white;
+             padding: 20px;
+             border-radius: 10px;
+             border: 1px solid #666;
+             z-index: 110;
+             display: none; /* Hidden by default */
+             width: 60%;
+             height: 70%;
+             display: none;
+             flex-direction: column;
+        }
+         #js-code-popup h3 { margin-top: 0; }
+         #js-code-popup textarea {
+             flex-grow: 1;
+             width: 98%;
+             margin-top: 10px;
+             font-family: monospace;
+             background: #111;
+             color: #eee;
+             border: 1px solid #555;
+         }
+         #js-code-popup button { margin-top: 10px; }
+
+    </style>
+</head>
+<body>
+    <div id="settings-panel">
+        <h3 id="settings-title">Panel Settings</h3>
+        <input type="hidden" id="settings-panel-id"> <label for="texture-upload">Background Texture (Edges/Back/Header):</label>
+        <input type="file" id="texture-upload" accept="image/jpeg,image/png,image/webp,image/gif">
+        <small>Upload image or leave blank for default.</small>
+
+        <label for="corner-radius">Corner Radius (0.0 - 0.5):</label>
+        <input type="range" id="corner-radius" min="0.0" max="0.5" step="0.01" value="0.1">
+
+        <label for="bevel-size">Bevel Size (0.0 - 0.1):</label>
+        <input type="range" id="bevel-size" min="0.0" max="0.1" step="0.005" value="0.02">
+
+        <label for="screen-opacity">Screen Opacity (0.0 - 1.0):</label>
+        <input type="range" id="screen-opacity" min="0.0" max="1.0" step="0.01" value="1.0">
+
+        <label for="panel-spacing">Grid Spacing (0 - 50 px):</label>
+        <input type="range" id="panel-spacing" min="0" max="50" step="1" value="10">
+
+        <div class="checkbox-group">
+            <input type="checkbox" id="apply-to-all">
+            <label for="apply-to-all" style="display: inline;">Apply to ALL Panels</label>
+        </div>
+
+        <button id="apply-js-button">Edit Panel JavaScript</button>
+        <hr style="margin: 15px 0; border-color: #666;">
+        <button id="apply-settings-button">Apply Settings</button>
+        <button id="close-settings-button" style="float: right;">Close</button>
+    </div>
+
+    <div id="js-code-popup">
+         <h3>Edit Panel JavaScript</h3>
+         <input type="hidden" id="js-panel-id">
+         <textarea id="js-code-input" placeholder="Enter JavaScript code to run on this panel's canvas. Use 'ctx' for the 2D context and 'canvas' for the element. Example: ctx.fillStyle='blue'; ctx.fillRect(10,10,50,50);"></textarea>
+         <div>
+            <button id="run-js-code-button">Run Code</button>
+            <button id="close-js-code-button" style="float: right;">Close</button>
+         </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.163.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.163.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
