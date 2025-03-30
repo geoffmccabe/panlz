@@ -1,37 +1,39 @@
 import * as THREE from 'three';
 import { Panel } from './Panel.js';
 
-const TOTAL_GRID_UNITS_X = 6; // Total width units (1/6ths)
-const BASE_PANEL_ASPECT_RATIO = 5 / 3; // Intrinsic aspect ratio (width/height) for scaling
 const MAX_PANEL_ROWS = 10; // Limit number of rows
 
 export class PanelManager {
-    constructor(scene, camera, domElement) {
+    constructor(scene, camera, domElement, initialConfig) {
         this.scene = scene;
         this.camera = camera;
         this.domElement = domElement;
+        this.initialConfig = initialConfig; // Store config
 
         this.panels = [];
         this.panelMap = new Map(); // For quick lookup by ID
         this.nextPanelId = 0;
 
-        // Grid state
-        this.gridSpacing = 0.2; // Spacing in world units (adjust based on scale)
-        this.gridCellWidth = 2.0; // Base width of a 1/6th panel in world units
+        // Grid state from config
+        this.gridUnitsX = initialConfig.gridUnitsX || 6;
+        this.gridCellWidth = initialConfig.gridCellWidth || 2.0; // Base width of a 1/6 panel
+        this.gridSpacingPx = initialConfig.gridSpacingPx || 10; // Store initial spacing in pixels
+        this.gridSpacing = 0; // World units, calculated by setSpacing
         this.gridOrigin = new THREE.Vector3(0, 0, 0); // Center of the grid system
 
         // Interaction state
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
         this.plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // Interaction plane
-        this.intersectionPoint = new THREE.Vector3(); // Where ray hits plane
+        this.intersectionPoint = new THREE.Vector3();
 
         this.selectedPanel = null;
         this.draggingPanel = null;
-        this.resizingPanel = null; // { panel: Panel, handle: 'left' | 'right' }
+        this.resizingPanel = null;
         this.dragOffset = new THREE.Vector3();
         this.initialPanelWidthUnits = 0;
         this.initialMouseX = 0;
+        this.initialGridX = 0; // Store initial gridX for left resize
 
         this.isMouseDown = false;
         this.jiggleTimeout = null;
@@ -40,7 +42,6 @@ export class PanelManager {
         this.settingsPanelElement = document.getElementById('settings-panel');
         this.jsCodePopupElement = document.getElementById('js-code-popup');
 
-
         this._addEventListeners();
     }
 
@@ -48,21 +49,43 @@ export class PanelManager {
         this.domElement.addEventListener('pointerdown', this._onPointerDown.bind(this), false);
         this.domElement.addEventListener('pointermove', this._onPointerMove.bind(this), false);
         this.domElement.addEventListener('pointerup', this._onPointerUp.bind(this), false);
-        this.domElement.addEventListener('pointerleave', this._onPointerUp.bind(this), false); // Treat leave as up
+        this.domElement.addEventListener('pointerleave', this._onPointerUp.bind(this), false);
     }
 
-    _removeEventListeners() {
-        // Implementation to remove listeners if needed
+    // --- Pixel to World Conversion ---
+    _calculatePixelToWorldRatio() {
+        // Estimate world height at z=0 based on camera FOV and distance
+        // This is an approximation, assumes grid is near z=0 plane relative to camera distance
+        const distance = this.camera.position.z; // Use camera's Z distance
+        if (distance <= 0) return 0.01; // Avoid division by zero or negative distance
+        const vFov = THREE.MathUtils.degToRad(this.camera.fov);
+        const worldHeight = 2 * Math.tan(vFov / 2) * distance;
+        return worldHeight / window.innerHeight;
+    }
+
+    setSpacing(pixels) {
+        this.gridSpacingPx = pixels; // Store current pixel value
+        const ratio = this._calculatePixelToWorldRatio();
+        this.gridSpacing = pixels * ratio;
+        console.log(`Set spacing: ${pixels}px -> ${this.gridSpacing.toFixed(3)} world units`);
+        this.updateLayout(); // Recalculate layout whenever spacing changes
+    }
+
+    getCurrentSpacingPx() {
+        return this.gridSpacingPx;
     }
 
     // --- Panel Management ---
 
     addPanel(config) {
         const id = this.nextPanelId++;
+        // Pass manager reference and grid cell width to Panel
+        config.panelManager = this;
+        config.gridCellWidth = this.gridCellWidth;
         const panel = new Panel(id, config, this.scene);
         this.panels.push(panel);
-        this.panelMap.set(id.toString(), panel); // Store by string ID for consistency with HTML values
-        this.updateLayout(); // Recalculate grid after adding
+        this.panelMap.set(id.toString(), panel);
+        this.updateLayout();
         return panel;
     }
 
@@ -81,139 +104,128 @@ export class PanelManager {
          return this.panelMap.get(panelId.toString());
     }
 
-
     // --- Layout Logic ---
 
-    setSpacing(pixels) {
-        // Convert pixel spacing to world units (this needs calibration based on camera distance/FOV)
-        // This is a rough approximation - a better way involves unprojecting screen points
-        const worldHeight = 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.position.z;
-        const pixelToWorld = worldHeight / window.innerHeight;
-        this.gridSpacing = pixels * pixelToWorld;
-        this.updateLayout();
-    }
-
-
     updateLayout() {
-        // 1. Calculate total world width available (can be dynamic based on panels, or fixed)
-        const totalUnitsWidth = TOTAL_GRID_UNITS_X;
-        const totalGridWidth = totalUnitsWidth * this.gridCellWidth + (totalUnitsWidth -1) * this.gridSpacing;
-        this.gridOrigin.x = -totalGridWidth / 2; // Center the grid horizontally
+        console.log('Updating layout...');
+        // 1. Calculate total world width available
+        const totalUnitsWidth = this.gridUnitsX;
+        const totalGridWidth = totalUnitsWidth * this.gridCellWidth + Math.max(0, totalUnitsWidth - 1) * this.gridSpacing;
+        this.gridOrigin.x = -totalGridWidth / 2;
 
-        // 2. Determine panel dimensions based on grid units
-        let currentY = 0; // Start from top or center? Let's center vertically later
-        const panelHeights = []; // Store calculated height for each row
+        // 2. Determine panel dimensions and positions
+        const grid = this._buildLogicalGrid(); // Arrange panels in logical rows/cols
 
-        const grid = this._buildLogicalGrid(); // Create a 2D array representing panel occupation
-
-        grid.forEach((row, rowIndex) => {
-             let maxPanelHeightInRow = 0;
-             row.forEach(panel => {
-                 if (panel) {
-                     const panelWidth = panel.widthUnits * this.gridCellWidth + (panel.widthUnits - 1) * this.gridSpacing;
-                     const panelHeight = panelWidth / BASE_PANEL_ASPECT_RATIO; // Height based on aspect ratio
-                     maxPanelHeightInRow = Math.max(maxPanelHeightInRow, panelHeight);
-                 }
-             });
-            panelHeights[rowIndex] = maxPanelHeightInRow;
-        });
-
-         const totalGridHeight = panelHeights.reduce((sum, h) => sum + h, 0) + Math.max(0, panelHeights.length - 1) * this.gridSpacing;
-         this.gridOrigin.y = totalGridHeight / 2; // Center vertically
-
+        // NEW Height Logic: Default height is gridCellWidth, making 1/6 panels square.
+        // Height might be overridden later by JS content per panel. For now, it's fixed per row.
+        const rowHeight = this.gridCellWidth; // Default height is the width of one cell
+        const totalGridHeight = grid.length * rowHeight + Math.max(0, grid.length - 1) * this.gridSpacing;
+        this.gridOrigin.y = totalGridHeight / 2; // Center vertically
 
         // 3. Position each panel
-        currentY = this.gridOrigin.y; // Start from top edge of centered grid
+        let currentY = this.gridOrigin.y;
 
         grid.forEach((row, rowIndex) => {
             let currentX = this.gridOrigin.x;
-             const rowHeight = panelHeights[rowIndex];
+            const processedInRow = new Set(); // Avoid processing same panel multiple times if it spans cols
 
-            row.forEach(panel => {
-                 if (panel) {
-                     const panelWidth = panel.widthUnits * this.gridCellWidth + (panel.widthUnits - 1) * this.gridSpacing;
-                     //const panelHeight = panelWidth / BASE_PANEL_ASPECT_RATIO; // Use calculated height
+            row.forEach((panelRef, colIndex) => {
+                if (panelRef && !processedInRow.has(panelRef.id)) {
+                    const panel = panelRef; // Get the actual panel object
+                    processedInRow.add(panel.id);
 
-                     const posX = currentX + panelWidth / 2;
-                     const posY = currentY - rowHeight / 2; // Position center Y within the row's height
-                     const posZ = 0; // Flat grid for now
+                    // Ensure panel starts at its logical gridX position
+                    currentX = this.gridOrigin.x + panel.gridX * (this.gridCellWidth + this.gridSpacing);
+
+                    const panelWidth = panel.widthUnits * this.gridCellWidth + Math.max(0, panel.widthUnits - 1) * this.gridSpacing;
+                    const panelHeight = rowHeight; // Use the fixed row height
+
+                    const posX = currentX + panelWidth / 2;
+                    const posY = currentY - panelHeight / 2;
+                    const posZ = 0;
 
                     // Update panel's visual transform
-                    panel.updateTransform(panelWidth, rowHeight, new THREE.Vector3(posX, posY, posZ));
+                    // This now includes size, potentially triggering geometry rebuild in Panel
+                    panel.setSizeAndPosition(panelWidth, panelHeight, new THREE.Vector3(posX, posY, posZ));
 
-                     currentX += panelWidth + this.gridSpacing;
-                 } else {
-                     // This accounts for empty slots if a panel doesn't start at gridX 0
-                     // Assumes panel.gridX was used correctly in _buildLogicalGrid
-                     // This simple iteration might need refinement for complex empty spaces
-                      currentX += this.gridCellWidth + this.gridSpacing; // Move past empty unit slot
-                 }
-             });
-             currentY -= (rowHeight + this.gridSpacing); // Move to next row position
+                     console.log(`Panel <span class="math-inline">\{panel\.id\} Layout\: grid\[</span>{rowIndex},<span class="math-inline">\{colIndex\}\] W\=</span>{panelWidth.toFixed(2)}, H=<span class="math-inline">\{panelHeight\.toFixed\(2\)\}, Pos\=\(</span>{posX.toFixed(2)}, ${posY.toFixed(2)})`);
+
+                } else if (!panelRef) {
+                    // This cell is empty, handled by starting next panel at correct gridX
+                }
+            });
+            currentY -= (rowHeight + this.gridSpacing); // Move to next row position
         });
+        console.log('Layout update complete.');
     }
 
-    // Helper to arrange panels logically based on their gridX/gridY properties
     _buildLogicalGrid() {
-         const grid = Array.from({ length: MAX_PANEL_ROWS }, () => Array(TOTAL_GRID_UNITS_X).fill(null));
-         const placedPanels = new Set();
+         // Simpler grid build assuming fixed height (1 unit high per row)
+         const grid = [];
+         const occupied = new Set(); // Keep track of "row,col" strings
 
-         // Sort panels primarily by Y, then by X for consistent placement
          const sortedPanels = [...this.panels].sort((a, b) => {
              if (a.gridY !== b.gridY) return a.gridY - b.gridY;
              return a.gridX - b.gridX;
          });
 
-        let maxRow = 0;
+         let maxRow = -1;
          sortedPanels.forEach(panel => {
-             // Ensure panel fits within bounds
-             panel.gridX = Math.max(0, Math.min(panel.gridX, TOTAL_GRID_UNITS_X - panel.widthUnits));
+             // Clamp position and size
+             panel.widthUnits = Math.max(1, Math.min(panel.widthUnits, this.gridUnitsX));
+             panel.gridX = Math.max(0, Math.min(panel.gridX, this.gridUnitsX - panel.widthUnits));
              panel.gridY = Math.max(0, panel.gridY);
 
-             // Naive placement: Place it, overwriting anything underneath for now
-             // A more robust system would prevent overlaps or shift panels down.
-             if (panel.gridY < MAX_PANEL_ROWS) {
-                maxRow = Math.max(maxRow, panel.gridY);
-                 for (let i = 0; i < panel.widthUnits; i++) {
-                     if (panel.gridX + i < TOTAL_GRID_UNITS_X) {
-                        // TODO: Handle overlaps better. This just overwrites.
-                        // if (grid[panel.gridY][panel.gridX + i] !== null) {
-                        //     console.warn(`Overlap detected for panel ${panel.id}`);
-                        // }
-                         grid[panel.gridY][panel.gridX + i] = panel; // Place reference in grid slots it occupies
-                         // Mark only the starting slot visually for the layout loop? No, use the reference.
-                     }
+             maxRow = Math.max(maxRow, panel.gridY);
+
+             // Ensure grid array is large enough
+             while (grid.length <= panel.gridY) {
+                 grid.push(Array(this.gridUnitsX).fill(null));
+             }
+
+             // Check for overlaps and place panel reference
+             let canPlace = true;
+             for (let i = 0; i < panel.widthUnits; i++) {
+                 const key = `<span class="math-inline">\{panel\.gridY\},</span>{panel.gridX + i}`;
+                 if (occupied.has(key)) {
+                    console.warn(`Overlap placing Panel ${panel.id} at ${key}`);
+                    canPlace = false;
+                    //break; // Simple overlap handling: skip panel if overlap
+                 }
+             }
+
+             if (canPlace) {
+                for (let i = 0; i < panel.widthUnits; i++) {
+                     const key = `<span class="math-inline">\{panel\.gridY\},</span>{panel.gridX + i}`;
+                     grid[panel.gridY][panel.gridX + i] = panel; // Store reference
+                     occupied.add(key);
                  }
              } else {
-                 console.warn(`Panel ${panel.id} placed outside max rows.`);
+                 // TODO: Handle placement failure (e.g., try next row?)
+                 console.error(`Failed to place Panel ${panel.id} due to overlap.`);
              }
          });
 
-        // Return only the used rows + 1 (or at least 1 row)
-         return grid.slice(0, maxRow + 1);
+        // Return only the used rows (or empty if no panels)
+         return grid;
     }
-
 
     // --- Interaction Handling ---
 
     _updateMouse(event) {
-        // Calculate mouse position in normalized device coordinates (-1 to +1)
         this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
     }
 
     _getIntersectedPanel(event) {
+        // Raycasting logic (same as before)
         this._updateMouse(event);
         this.raycaster.setFromCamera(this.mouse, this.camera);
-
         const interactionObjects = this.panels.flatMap(p => p.getRaycastObjects());
         if (interactionObjects.length === 0) return null;
-
-        const intersects = this.raycaster.intersectObjects(interactionObjects, false); // Don't check children recursively here
-
+        const intersects = this.raycaster.intersectObjects(interactionObjects, false);
         if (intersects.length > 0) {
             const intersectedObject = intersects[0].object;
-            // Find the panel this object belongs to (using the name convention)
             const match = intersectedObject.name.match(/panel(Frame|Screen|Header|Gear|Handle_.*)_(\d+)/);
             if (match) {
                 const panelId = match[2];
@@ -227,305 +239,170 @@ export class PanelManager {
     }
 
     _onPointerDown(event) {
+        // Interaction logic (largely same as before, but store initialGridX for resize)
         event.preventDefault();
         this.isMouseDown = true;
-
         const intersection = this._getIntersectedPanel(event);
         this.selectedPanel = intersection ? intersection.panel : null;
 
         if (!this.selectedPanel) {
-            // Clicked outside panels, potentially close UI
              if (!this.settingsPanelElement.contains(event.target) && !this.jsCodePopupElement.contains(event.target)) {
-                this.closeSettingsPanel();
-                this.closeJsCodePopup();
-             }
-            return;
+                this.closeSettingsPanel(); this.closeJsCodePopup();
+             } return;
         }
 
-        // Update interaction plane to be at the depth of the clicked panel
-        this.plane.setFromNormalAndCoplanarPoint(
-            this.camera.getWorldDirection(this.plane.normal).negate(), // Normal facing camera
-            intersection.point // Coplanar with intersection point
-        );
-
-        // Get intersection point on the interaction plane
+        this.plane.setFromNormalAndCoplanarPoint(this.camera.getWorldDirection(this.plane.normal).negate(), intersection.point);
         if (this.raycaster.ray.intersectPlane(this.plane, this.intersectionPoint)) {
-
             const objectName = intersection.objectName;
             const panel = this.selectedPanel;
-
             if (objectName.startsWith('panelGear_')) {
                 this.openSettingsPanel(panel);
             } else if (objectName.startsWith('panelHandle_Top_') || objectName.startsWith('panelHandle_Bottom_')) {
                 this.draggingPanel = panel;
                 this.domElement.style.cursor = 'grabbing';
-                // Calculate offset from panel center to grab point
                 this.dragOffset.copy(this.intersectionPoint).sub(panel.meshGroup.position);
-                 this._startJiggleEffect(panel); // Start jiggle for others
+                 this._startJiggleEffect(panel);
             } else if (objectName.startsWith('panelHandle_Left_') || objectName.startsWith('panelHandle_Right_')) {
-                 this.resizingPanel = {
-                    panel: panel,
-                    handle: objectName.includes('Left') ? 'left' : 'right'
-                 };
+                 this.resizingPanel = { panel: panel, handle: objectName.includes('Left') ? 'left' : 'right' };
                  this.domElement.style.cursor = 'ew-resize';
                  this.initialPanelWidthUnits = panel.widthUnits;
-                 this.initialMouseX = this.intersectionPoint.x; // Store initial grab X in world coords
-            } else {
-                 // Clicked on panel body/screen - potentially allow drag here too?
-                 // this.draggingPanel = panel; // Uncomment to allow dragging whole body
-                 // this.domElement.style.cursor = 'grabbing';
-                 // this.dragOffset.copy(this.intersectionPoint).sub(panel.meshGroup.position);
+                 this.initialMouseX = this.intersectionPoint.x;
+                 this.initialGridX = panel.gridX; // Store initial gridX for left resize adjustment
             }
         }
     }
 
     _onPointerMove(event) {
+        // Interaction logic (largely same as before, but adjust resize logic)
         event.preventDefault();
-
-        // Update mouse and raycaster for hover effects or continuous interaction
         this._updateMouse(event);
         this.raycaster.setFromCamera(this.mouse, this.camera);
+        if (!this.raycaster.ray.intersectPlane(this.plane, this.intersectionPoint)) return;
 
-        // Get intersection with the interaction plane
-        if (!this.raycaster.ray.intersectPlane(this.plane, this.intersectionPoint)) {
-            return; // No intersection with plane
-        }
-
-        // Hover effect
+        // --- Hover effect logic (same as before) ---
         const intersection = this._getIntersectedPanel(event);
-        const hoverPanel = intersection ? intersection.panel : null;
         const hoverObjectName = intersection ? intersection.objectName : null;
-
-        if (!this.isMouseDown) { // Only update cursor if not actively dragging/resizing
-            if (hoverObjectName?.startsWith('panelGear_')) {
-                this.domElement.style.cursor = 'pointer';
-            } else if (hoverObjectName?.startsWith('panelHandle_Top_') || hoverObjectName?.startsWith('panelHandle_Bottom_')) {
-                 this.domElement.style.cursor = 'grab';
-            } else if (hoverObjectName?.startsWith('panelHandle_Left_') || hoverObjectName?.startsWith('panelHandle_Right_')) {
-                this.domElement.style.cursor = 'ew-resize';
-            } else if (hoverPanel) {
-                 this.domElement.style.cursor = 'default'; // Or 'move' if dragging body enabled
-            }
-             else {
-                this.domElement.style.cursor = 'default';
-            }
+        if (!this.isMouseDown) {
+             if (hoverObjectName?.startsWith('panelGear_')) this.domElement.style.cursor = 'pointer';
+             else if (hoverObjectName?.startsWith('panelHandle_Top_') || hoverObjectName?.startsWith('panelHandle_Bottom_')) this.domElement.style.cursor = 'grab';
+             else if (hoverObjectName?.startsWith('panelHandle_Left_') || hoverObjectName?.startsWith('panelHandle_Right_')) this.domElement.style.cursor = 'ew-resize';
+             else this.domElement.style.cursor = 'default';
         }
+         // --- End Hover ---
 
 
-        // Handle Dragging
         if (this.draggingPanel) {
             const targetPos = this.intersectionPoint.clone().sub(this.dragOffset);
-            this.draggingPanel.targetPosition.copy(targetPos); // Update target for smooth follow
-
-            // --- Snap Logic Preview (Optional but good UX) ---
-            // Calculate which grid cell the targetPos falls into
-            const { gridX, gridY } = this._getGridSlotFromPosition(targetPos);
-            // Maybe visually highlight the target grid slot? (Advanced)
+            this.draggingPanel.targetPosition.copy(targetPos);
+             // Snap preview logic could go here
         }
 
-        // Handle Resizing
         if (this.resizingPanel) {
              const panel = this.resizingPanel.panel;
              const currentMouseX = this.intersectionPoint.x;
              const deltaX = currentMouseX - this.initialMouseX;
+             const deltaUnits = Math.round(deltaX / (this.gridCellWidth + this.gridSpacing));
 
-            // Convert world space deltaX to grid units delta
-            // This assumes panel wasn't moved, only resized. More complex if both allowed simultaneously.
-            const deltaUnits = Math.round(deltaX / (this.gridCellWidth + this.gridSpacing));
-
-            let newWidthUnits = this.initialPanelWidthUnits;
+             let newWidthUnits = this.initialPanelWidthUnits;
+             let newGridX = this.initialGridX; // Start with initial X
 
              if (this.resizingPanel.handle === 'right') {
                  newWidthUnits += deltaUnits;
              } else { // Resizing left handle
                  newWidthUnits -= deltaUnits;
-                 // Adjust gridX as well when pulling left handle
-                 // This is tricky - needs careful calculation based on how much width changed
-                 // Simplified: Assume gridX changes by -deltaUnits. Needs validation.
-                  // panel.gridX = initialGridX - deltaUnits; // Store initialGridX on pointer down
+                 newGridX += deltaUnits; // Move gridX when pulling left handle
             }
 
+            // Clamp width (1 to TOTAL_GRID_UNITS_X)
+            newWidthUnits = THREE.MathUtils.clamp(newWidthUnits, 1, this.gridUnitsX);
+            // Clamp gridX (0 to prevent going off left edge)
+             newGridX = Math.max(0, newGridX);
+            // Prevent panel from exceeding right edge due to gridX change
+             newWidthUnits = Math.min(newWidthUnits, this.gridUnitsX - newGridX);
+             // Ensure width is still at least 1 after right-edge clamping
+             newWidthUnits = Math.max(1, newWidthUnits);
 
-            // Clamp width (1 to TOTAL_GRID_UNITS_X) and ensure it doesn't exceed grid boundaries
-            newWidthUnits = THREE.MathUtils.clamp(newWidthUnits, 1, TOTAL_GRID_UNITS_X);
-             const maxPossibleWidth = TOTAL_GRID_UNITS_X - panel.gridX; // Max width from current X pos
-             newWidthUnits = Math.min(newWidthUnits, maxPossibleWidth);
 
-
-            if (panel.widthUnits !== newWidthUnits) {
-                panel.widthUnits = newWidthUnits;
-                 // Re-layout the entire grid to reflect the size change immediately
-                this.updateLayout();
+            // Apply changes if they are valid and different
+            if (panel.widthUnits !== newWidthUnits || panel.gridX !== newGridX) {
+                 console.log(`Resizing Panel <span class="math-inline">\{panel\.id\}\: DeltaUnits\=</span>{deltaUnits}, NewWidth=<span class="math-inline">\{newWidthUnits\}, NewGridX\=</span>{newGridX}`);
+                 panel.widthUnits = newWidthUnits;
+                 panel.gridX = newGridX; // Update logical grid position
+                 this.updateLayout(); // Re-layout immediately
             }
         }
     }
 
     _onPointerUp(event) {
+        // Interaction logic (largely same as before)
         event.preventDefault();
         this.isMouseDown = false;
-        this.domElement.style.cursor = 'default'; // Reset cursor
-
-        this._stopJiggleEffect(); // Stop jiggling when drag ends
-
+        this.domElement.style.cursor = 'default';
+        this._stopJiggleEffect();
 
         if (this.draggingPanel) {
-            // --- Final Snap Logic ---
             const panel = this.draggingPanel;
-            const finalPos = panel.targetPosition; // Use the last target position
+            const finalPos = panel.targetPosition;
             const { gridX, gridY } = this._getGridSlotFromPosition(finalPos);
 
-            // TODO: Collision detection - check if target slot is occupied
-            // If occupied, either don't move, or shift other panels (complex)
-            // For now, just move it:
-            panel.gridX = Math.max(0, Math.min(gridX, TOTAL_GRID_UNITS_X - panel.widthUnits)); // Clamp X
-            panel.gridY = Math.max(0, gridY); // Clamp Y
+            // Prevent panel going off edge during drag/drop
+            const clampedGridX = Math.max(0, Math.min(gridX, this.gridUnitsX - panel.widthUnits));
+
+            // TODO: Overlap check before setting final position
+            panel.gridX = clampedGridX;
+            panel.gridY = Math.max(0, gridY); // Ensure gridY is non-negative
 
             this.draggingPanel = null;
-            this.updateLayout(); // Final layout update
+            this.updateLayout();
         }
 
         if (this.resizingPanel) {
-             // Final width was already set during move, just clear state
+             // Width and gridX already updated during move
              this.resizingPanel = null;
-             this.updateLayout(); // Ensure layout is correct after resize potentially changed row heights etc.
+             this.updateLayout(); // Final layout update
         }
-
-        this.selectedPanel = null; // Clear selection after action
+        this.selectedPanel = null;
     }
 
-    // Convert world position to grid indices
     _getGridSlotFromPosition(position) {
-        // Adjust position relative to grid origin
+        // Position to Grid logic (Needs update for fixed row height)
         const relativeX = position.x - this.gridOrigin.x;
-        const relativeY = this.gridOrigin.y - position.y; // Y increases downwards in grid logic
+        const relativeY = this.gridOrigin.y - position.y; // Y increases downwards
 
-        const gridX = Math.floor(relativeX / (this.gridCellWidth + this.gridSpacing));
+        const gridX = Math.round(relativeX / (this.gridCellWidth + this.gridSpacing));
 
-        // Calculating gridY is harder as rows have variable height.
-        // Iterate through calculated row heights to find the correct row.
-        let cumulativeHeight = 0;
-        let gridY = 0;
-        const panelHeights = this._calculateRowHeights(); // Need this helper or store heights
-         for (let i = 0; i < panelHeights.length; i++) {
-            const rowBottom = cumulativeHeight + panelHeights[i];
-             if (relativeY < rowBottom) {
-                gridY = i;
-                break;
-             }
-            cumulativeHeight += panelHeights[i] + this.gridSpacing;
-            gridY = i + 1; // If it's below the last calculated row
-         }
+        // Simpler Y calculation with fixed row height
+        const rowHeightWithSpacing = this.gridCellWidth + this.gridSpacing;
+        const gridY = Math.floor(relativeY / rowHeightWithSpacing);
 
-
-        return { gridX: Math.max(0, gridX), gridY: Math.max(0, gridY) };
+        return {
+            gridX: Math.max(0, gridX),
+            gridY: Math.max(0, gridY) // Clamp Y >= 0
+        };
     }
 
-    _calculateRowHeights() {
-         // Duplicates some logic from updateLayout - refactor potential
-         const panelHeights = [];
-         const grid = this._buildLogicalGrid();
-          grid.forEach((row, rowIndex) => {
-             let maxPanelHeightInRow = 0;
-             // Find unique panels in the row (since grid stores references in multiple slots)
-             const panelsInRow = [...new Set(row.filter(p => p !== null))];
-             panelsInRow.forEach(panel => {
-                 const panelWidth = panel.widthUnits * this.gridCellWidth + (panel.widthUnits - 1) * this.gridSpacing;
-                 const panelHeight = panelWidth / BASE_PANEL_ASPECT_RATIO;
-                 maxPanelHeightInRow = Math.max(maxPanelHeightInRow, panelHeight);
-             });
-             // Assign a minimum height even if row is empty? Maybe not.
-             panelHeights[rowIndex] = maxPanelHeightInRow > 0 ? maxPanelHeightInRow : (this.gridCellWidth / BASE_PANEL_ASPECT_RATIO); // Fallback height if row is empty but exists
-         });
-         return panelHeights;
-    }
-
-
-    // --- Settings UI ---
-
-    openSettingsPanel(panel) {
+    // --- Settings UI --- (Mostly same as before)
+    openSettingsPanel(panel) { /* ... */
         if (!panel) return;
-        // Populate panel with current settings
         document.getElementById('settings-panel-id').value = panel.id;
         document.getElementById('settings-title').textContent = `Settings: ${panel.title}`;
         document.getElementById('corner-radius').value = panel.cornerRadius;
         document.getElementById('bevel-size').value = panel.bevelSize;
         document.getElementById('screen-opacity').value = panel.screenOpacity;
-        document.getElementById('panel-spacing').value = Math.round(this.gridSpacing / (this._calculatePixelToWorldRatio() || 0.01)); // Convert back to pixels
+        document.getElementById('panel-spacing').value = this.getCurrentSpacingPx();
         document.getElementById('texture-upload').value = ''; // Clear file input
          document.getElementById('apply-to-all').checked = false; // Default to single panel
-
         this.settingsPanelElement.style.display = 'block';
-         this.closeJsCodePopup(); // Close code editor if open
+         this.closeJsCodePopup();
     }
+    closeSettingsPanel() { this.settingsPanelElement.style.display = 'none'; }
+    closeJsCodePopup() { this.jsCodePopupElement.style.display = 'none'; }
 
-    closeSettingsPanel() {
-        this.settingsPanelElement.style.display = 'none';
-    }
-
-     closeJsCodePopup() {
-        this.jsCodePopupElement.style.display = 'none';
-    }
-
-     _calculatePixelToWorldRatio() {
-         const worldHeight = 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.position.z;
-         return worldHeight / window.innerHeight;
-     }
-
-
-    applySettings(panelId, settings, applyToAll) {
+    applySettings(panelId, settings, applyToAll) { /* ... */
         if (applyToAll) {
             this.panels.forEach(p => p.applySettings(settings));
         } else {
             const panel = this.getPanelById(panelId);
-            if (panel) {
-                panel.applySettings(settings);
-            }
+            if (panel) panel.applySettings(settings);
         }
-        // Applying settings might change panel appearance/size needs, potentially requiring layout update
-         this.updateLayout(); // Update layout if settings could affect size/aspect indirectly
-    }
-
-    // --- Animation / Effects ---
-     _startJiggleEffect(draggedPanel) {
-         clearTimeout(this.jiggleTimeout);
-         this.jiggleTimeout = setTimeout(() => { // Add a small delay before jiggle starts
-             this.panels.forEach(p => {
-                 if (p !== draggedPanel) {
-                     const angle = (Math.random() - 0.5) * 0.02; // Small random angle in radians
-                     const xOffset = (Math.random() - 0.5) * 0.05;
-                     const yOffset = (Math.random() - 0.5) * 0.05;
-                     p.targetQuaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), angle);
-                    // Add offset to existing target position, not absolute
-                    p.targetPosition.add(new THREE.Vector3(xOffset, yOffset, 0));
-                 }
-             });
-         }, 150); // 150ms delay
-     }
-
-    _stopJiggleEffect() {
-        clearTimeout(this.jiggleTimeout);
-        this.panels.forEach(p => {
-            // Reset rotation and position offsets smoothly via the update loop lerp/slerp
-            p.targetQuaternion.identity(); // Target identity quaternion (no rotation)
-            // Recalculate correct target position from grid layout
-            // This needs the panel's final gridX/gridY BEFORE calling updateLayout
-            // Or, updateLayout sets the targetPosition directly. Let's assume updateLayout handles it.
-        });
-        // Call updateLayout() here or ensure it's called after snap to reset target positions correctly.
-        // Already called in _onPointerUp after snap logic.
-    }
-
-
-    update(deltaTime) {
-        // Update individual panel animations (smooth movement, jiggle recovery)
-        this.panels.forEach(panel => panel.update(deltaTime));
-    }
-
-    dispose() {
-        this._removeEventListeners();
-        this.panels.forEach(panel => panel.dispose());
-        this.panels = [];
-        this.panelMap.clear();
-        // Dispose other resources if necessary
-    }
-}
+        //
