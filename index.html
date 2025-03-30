@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Three.js Panel Grid</title>
+    <title>Panlz v1</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #222; }
+        body { margin: 0; overflow: hidden; background-color: #111; /* Darker default bg */ }
         canvas { display: block; }
         #settings-panel {
             position: absolute;
@@ -15,11 +15,13 @@
             color: white;
             padding: 15px;
             border-radius: 8px;
-            font-family: sans-serif;
+            font-family: sans-serif; /* Using sans-serif for now, Roboto needs font loading */
             display: none; /* Hidden by default */
             width: 280px;
             border: 1px solid #555;
             z-index: 100;
+            max-height: 90vh; /* Prevent overflow */
+            overflow-y: auto; /* Allow scrolling */
         }
         #settings-panel h3 { margin-top: 0; border-bottom: 1px solid #666; padding-bottom: 5px; }
         #settings-panel label { display: block; margin-top: 10px; font-size: 0.9em;}
@@ -31,7 +33,6 @@
         #settings-panel button { margin-top: 15px; padding: 5px 10px; }
         #settings-panel .checkbox-group { margin-top: 10px; }
         #js-code-popup {
-             /* Similar styling to settings-panel, maybe larger */
              position: absolute;
              top: 50%;
              left: 50%;
@@ -47,6 +48,7 @@
              height: 70%;
              display: none;
              flex-direction: column;
+             font-family: sans-serif;
         }
          #js-code-popup h3 { margin-top: 0; }
          #js-code-popup textarea {
@@ -65,9 +67,11 @@
 <body>
     <div id="settings-panel">
         <h3 id="settings-title">Panel Settings</h3>
-        <input type="hidden" id="settings-panel-id"> <label for="texture-upload">Background Texture (Edges/Back/Header):</label>
+        <input type="hidden" id="settings-panel-id">
+
+        <label for="texture-upload">Frame Texture (Edges/Back/Header):</label>
         <input type="file" id="texture-upload" accept="image/jpeg,image/png,image/webp,image/gif">
-        <small>Upload image or leave blank for default.</small>
+        <small>Upload image or leave blank for default color.</small>
 
         <label for="corner-radius">Corner Radius (0.0 - 0.5):</label>
         <input type="range" id="corner-radius" min="0.0" max="0.5" step="0.01" value="0.1">
